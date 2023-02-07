@@ -15,8 +15,8 @@ jobs:
           website-id: '80ba08fd-d86a-4791-72b3-aec703795b94'
           scan-type: 'FullWithSelectedProfile'
           profile-id: '2761f6dc-fa57-4d99-ee58-afa10260c0fc'
-          user-id: 'de8d4f9b7f914621a3b3acdb01f8e690'
-          api-token: 'R/KPlKlBKvRuW6zny525Nf1EJbJpSswyLZSkRmM6OF0='
+          user-id: ${{ secrets.NETSPARKER_USER_ID }}
+          api-token: ${{ secrets.NETSPARKER_API_TOKEN }}
           base-url: 'https://www.netsparkercloud.com'
       # Displays output for action
       - name: Display Scan Request Message
