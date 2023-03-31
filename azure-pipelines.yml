@@ -1,0 +1,5 @@
+- task: netsparker-cloud@1
+  inputs:
+    apiConnection: 'Ipek Connect'
+    scanTypes: '1'
+    scanWebSites: '06e11306-3091-4f85-647a-aef60151c6fa'
