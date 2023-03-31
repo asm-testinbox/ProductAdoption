@@ -1,2 +1,149 @@
-curl -u "16dbca21872c495cce13ad4402ece378:C7OIVK0/P0poTGhbVXJXTEIWZSv2Ikc7N3zC884W2mE=" -X POST https://www.netsparkercloud.com/api/1.0/scans/CreateFromPluginScanRequest -H "Content-Type: application/json" -d "{'WebsiteId': '06e11306-3091-4f85-647a-aef60151c6fa', 'ProfileId': '2cabe34c-3268-48bb-836e-afd6020035d6', 'ScanType': 'Incremental', 'VcsCommitInfoModel': { 'CiBuildConfigurationName' : '$SYSTEM_TEAMPROJECT', 'CiBuildHasChange': '$BUILD_SOURCEVERSION', 'CiBuildId': '$BUILD_BUILDID', 'CiBuildUrl': '$SYSTEM_TEAMFOUNDATIONCOLLECTIONURI', 'Committer': '$BUILD_REQUESTEDFOREMAIL', 'IntegrationSystem': 'AzureDevOps', 'VcsName': '$BUILD_REPOSITORY_PROVIDER', 'VcsVersion': '$BUILD_SOURCEVERSION' }}"
+trigger:
+- master
 
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+- script: |
+      #!/bin/bash
+   
+      #Bash script starting
+
+      MinimumSeverity='DoNotFail' 
+      CancelScan=true
+      BaseUrl='https://www.netsparkercloud.com'
+      WebsiteId='06e11306-3091-4f85-647a-aef60151c6fa'
+      ScanType='FullWithSelectedProfile'
+      ProfileId='2cabe34c-3268-48bb-836e-afd6020035d6'
+      IntegrationSystem='AzureDevOps'
+
+      DoNotFail=true
+      FalsePositive=false
+      IsConfirmed=false
+      AcceptedRisk=false
+      
+      typeset -A SeverityOptionsForBuildFailMesssage
+      SeverityOptionsForBuildFailMesssage[DoNotFail]="Do not fail the build"
+      SeverityOptionsForBuildFailMesssage[Critical]="Critical"
+      SeverityOptionsForBuildFailMesssage[Critical,High]="High or above"
+      SeverityOptionsForBuildFailMesssage[Critical,High,Medium]="Medium or above"
+      SeverityOptionsForBuildFailMesssage[Critical,High,Medium,Low]="Low or above"
+      SeverityOptionsForBuildFailMesssage[Critical,High,Medium,Low,Best Practice]="Best Practices or above"
+
+      CreateScanUrl="$BaseUrl/api/1.0/scans/CreateFromPluginScanRequest"
+      ScanInfoUrl="$BaseUrl/api/1.0/scans/ScanInfoForPlugin"
+      ScanCancelUrl="$BaseUrl/api/1.0/scans/CancelScanForPlugin/"
+      
+      Body="{'WebsiteId': '$WebsiteId', 'ProfileId': '$ProfileId', 'ScanType': '$ScanType', 'VcsCommitInfoModel': {'CiBuildConfigurationName': '$SYSTEM_TEAMPROJECT', 'CiBuildHasChange': '$BUILD_SOURCEVERSION', 'CiBuildId': '$BUILD_BUILDID', 'CiBuildUrl': '$SYSTEM_TEAMFOUNDATIONCOLLECTIONURI', 'Committer': '$BUILD_REQUESTEDFOREMAIL', 'IntegrationSystem': '$IntegrationSystem', 'VcsName': '$BUILD_REPOSITORY_PROVIDER', 'VcsVersion': '$BUILD_SOURCEVERSION'}}"
+      
+      UserNameTokenPair="$USERID:$APITOKEN"
+      
+      typeset -A ScanTaskState
+      ScanTaskState[0]=Queued
+      ScanTaskState[1]=Scanning
+      ScanTaskState[2]=Archiving
+      ScanTaskState[3]=Complete
+      ScanTaskState[4]=Failed
+      ScanTaskState[5]=Cancelled
+      ScanTaskState[6]=Delayed
+      ScanTaskState[7]=Pausing
+      ScanTaskState[8]=Paused
+      ScanTaskState[9]=Resuming
+      
+      function CancelScan () {
+          scanTaskId=$1
+          read IsValid ErrorMessage < <(echo $(curl -u $UserNameTokenPair -X POST "$ScanCancelUrl$scanTaskId" -H 'Content-Type: application/json' -d "" | jq -r '.IsValid, .ErrorMessage'))
+      
+          if [[ $IsValid == true ]]; then
+              echo "Scan canceled, Id: $scanTaskId"
+          else
+              echo 'Scan cancel error:'
+              echo $ErrorMessage
+              exit
+          fi
+      }
+      
+      read ScanTaskId IsValid < <(echo $(curl -u $UserNameTokenPair -X POST "$CreateScanUrl" -H 'Content-Type: application/json' -d "$Body" | jq -r '.ScanTaskId, .IsValid'))
+      
+      echo "Created scan..."
+      echo "Scan task id:  $ScanTaskId"
+      
+      if [[ ! -z "$ScanTaskId" ]] && $IsValid
+      then
+        isScanCompleted=false
+        #Check the scan status every 10 seconds.
+        while :
+        do
+          if [[ $isScanCompleted == true ]]; then
+            break
+          fi
+          echo 'Requesting scan info..'
+         
+          #get scan info
+          scanInfoResult=$(curl -u $UserNameTokenPair -X POST "$ScanInfoUrl" -H 'Content-Type: application/json' --data-raw '{ "ScanId": "'$ScanTaskId'", "DoNotFail": '$DoNotFail', "IsConfirmed": '$IsConfirmed', "IgnoredVulnerabilityStateFilters": { "Present": false, "FixedUnconfirmed": false, "FixedCantRetest": false, "FixedConfirmed": false, "Revived": false, "Scanning": false, "Ignored": false, "AcceptedRisk": '$AcceptedRisk', "FalsePositive": '$FalsePositive' }}')
+          echo "Scan Info Result : $scanInfoResult"
+          InfoIsValid=$(echo $scanInfoResult | jq -r '.IsValid')
+          FoundedSeverities=($(echo $scanInfoResult | jq -r '.FoundedSeverityAndCounts | keys[]'))
+          FoundedSeverityCounts=($(echo $scanInfoResult | jq -r '.FoundedSeverityAndCounts | values[]'))
+          InfoState=$(echo $scanInfoResult | jq -r '.State')
+
+          echo "---- Scan Info Start ----"
+
+          if  ! $InfoIsValid
+          then
+              echo 'Error when getting scan info.'
+              exit 
+          fi
+
+          echo "ScanTaskId: $ScanTaskId"
+          echo "State: $InfoState"
+          echo "IsValid: $InfoIsValid"
+          echo "FoundedSeverities : "
+      
+          #severity list null check control
+          if [[ $FoundedSeverities != {} ]] &&  [[ ! -z $FoundedSeverities ]]
+          then
+              for (( i=0; i<${#FoundedSeverities[@]}; i++)); do
+                echo "- ${FoundedSeverities[$i]} (${FoundedSeverityCounts[$i]})"
+                if [[ "$MinimumSeverity" == *"${FoundedSeverities[$i]}"* ]]; then
+                  echo "---- Error Messages ----"
+                  severityText=$SeverityOptionsForBuildFailMesssage[$MinimumSeverity];
+                  echo "- Build failed because scan contains $severityText severity!"
+                  echo "---- Error Messages ----"
+                  echo "---- Scan Info End ----"  
+                  #cancel scan
+                  if [[ $CancelScan == true ]]; then
+                    CancelScan $ScanTaskId
+                  fi
+                  exit
+                fi
+              done
+          else
+             echo "no vulnerability found."
+          fi      
+          echo "---- Scan Info End ----"  
+          #scan state control
+          if [ "$InfoState" = "${ScanTaskState[4]}" ] || [ "$InfoState" = "${ScanTaskState[5]}" ] || [ "$InfoState" = "${ScanTaskState[8]}" ] || [ "$InfoState" = "${ScanTaskState[7]}" ]
+          then
+              echo "---- Error Messages ----"
+              echo "Scan aborted because state is $InfoState"
+              echo "---- Error Messages ----"
+              exit
+          fi
+      
+          if [ "$InfoState" = "${ScanTaskState[3]}" ]
+          then
+              isScanCompleted=true
+              exit 
+          else
+              isScanCompleted=false
+              sleep 10s
+          fi
+        done
+      else
+          echo "---- Error Messages ----"
+          echo $ErrorMessage
+          echo "---- Error Messages ----"
+          exit
+      fi
